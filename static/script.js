@@ -14,6 +14,8 @@ class ChatApp {
         this.errorMessage = document.getElementById('errorMessage');
         this.modalOk = document.getElementById('modalOk');
         this.closeModal = document.getElementById('closeModal');
+        this.themeToggle = document.getElementById('themeToggle');
+        this.themeIcon = document.getElementById('themeIcon');
         
         this.isTyping = false;
         this.lastBotMessage = '';
@@ -23,6 +25,7 @@ class ChatApp {
     
     init() {
         this.setupEventListeners();
+        this.initTheme();
         this.updateCurrentTime();
         this.setStatus('ready', 'Ready');
         
@@ -35,6 +38,33 @@ class ChatApp {
         
         // Update time every minute
         setInterval(() => this.updateCurrentTime(), 60000);
+    }
+    
+    initTheme() {
+        // Load saved theme or default to light
+        const savedTheme = localStorage.getItem('theme') || 'light';
+        this.setTheme(savedTheme);
+    }
+    
+    setTheme(theme) {
+        document.documentElement.setAttribute('data-theme', theme);
+        document.body.setAttribute('data-theme', theme);
+        localStorage.setItem('theme', theme);
+        
+        // Update icon
+        if (theme === 'dark') {
+            this.themeIcon.className = 'fas fa-sun';
+            this.themeToggle.title = 'Switch to Light Theme';
+        } else {
+            this.themeIcon.className = 'fas fa-moon';
+            this.themeToggle.title = 'Switch to Dark Theme';
+        }
+    }
+    
+    toggleTheme() {
+        const currentTheme = document.documentElement.getAttribute('data-theme');
+        const newTheme = currentTheme === 'dark' ? 'light' : 'dark';
+        this.setTheme(newTheme);
     }
     
     setupEventListeners() {
@@ -50,6 +80,7 @@ class ChatApp {
         // Action buttons
         this.clearButton.addEventListener('click', () => this.clearChat());
         this.copyButton.addEventListener('click', () => this.copyLastResponse());
+        this.themeToggle.addEventListener('click', () => this.toggleTheme());
         
         // Modal events
         this.modalOk.addEventListener('click', () => this.hideErrorModal());
@@ -113,25 +144,103 @@ class ChatApp {
     }
     
     formatMessageText(text) {
-        // Convert text to HTML with proper formatting
-        let formatted = text
-            // Convert line breaks to <br> tags
-            .replace(/\n/g, '<br>')
-            // Convert **text** to <strong>text</strong>
-            .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
-            // Convert *text* to <em>text</em>
-            .replace(/\*(.*?)\*/g, '<em>$1</em>')
-            // Convert bullet points to proper list items
-            .replace(/^[\s]*•[\s]+/gm, '• ')
-            .replace(/^[\s]*\*[\s]+/gm, '• ')
-            // Convert numbered lists
-            .replace(/^[\s]*(\d+\.)[\s]+/gm, '$1 ')
-            // Convert double line breaks to paragraph breaks
-            .replace(/\n\n/g, '<br><br>')
-            // Convert URLs to clickable links
-            .replace(/(https?:\/\/[^\s]+)/g, '<a href="$1" target="_blank" style="color: #667eea; text-decoration: underline;">$1</a>');
-        
-        return formatted;
+        const escapeHtml = (str) => str
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;');
+
+        const applyInlineFormatting = (str) => {
+            let processed = escapeHtml(str);
+            processed = processed.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+            processed = processed.replace(/\*(.+?)\*/g, '<em>$1</em>');
+            processed = processed.replace(/`([^`]+)`/g, '<code>$1</code>');
+            processed = processed.replace(/(https?:\/\/[^\s<]+)/g, '<a href="$1" target="_blank">$1</a>');
+            return processed;
+        };
+
+        const lines = text.split('\n');
+        let html = '';
+        let listBuffer = [];
+        let listType = null;
+        let inCodeBlock = false;
+        let codeBuffer = [];
+
+        const flushList = () => {
+            if (listBuffer.length) {
+                html += `<${listType}>${listBuffer.join('')}</${listType}>`;
+                listBuffer = [];
+                listType = null;
+            }
+        };
+
+        const flushCode = () => {
+            if (codeBuffer.length) {
+                html += `<pre><code>${escapeHtml(codeBuffer.join('\n'))}</code></pre>`;
+                codeBuffer = [];
+            }
+        };
+
+        for (let rawLine of lines) {
+            const line = rawLine.trimEnd();
+
+            if (line.startsWith('```')) {
+                if (inCodeBlock) {
+                    flushCode();
+                    inCodeBlock = false;
+                } else {
+                    flushList();
+                    inCodeBlock = true;
+                }
+                continue;
+            }
+
+            if (inCodeBlock) {
+                codeBuffer.push(rawLine);
+                continue;
+            }
+
+            if (!line.trim()) {
+                flushList();
+                html += '<br>';
+                continue;
+            }
+
+            const headingMatch = line.match(/^(#{1,4})\s+(.*)/);
+            if (headingMatch) {
+                flushList();
+                const level = Math.min(headingMatch[1].length + 2, 5);
+                html += `<h${level}>${applyInlineFormatting(headingMatch[2])}</h${level}>`;
+                continue;
+            }
+
+            const bulletMatch = line.match(/^[-*•]\s+(.*)/);
+            if (bulletMatch) {
+                if (listType !== 'ul') {
+                    flushList();
+                    listType = 'ul';
+                }
+                listBuffer.push(`<li>${applyInlineFormatting(bulletMatch[1])}</li>`);
+                continue;
+            }
+
+            const orderedMatch = line.match(/^\d+\.\s+(.*)/);
+            if (orderedMatch) {
+                if (listType !== 'ol') {
+                    flushList();
+                    listType = 'ol';
+                }
+                listBuffer.push(`<li>${applyInlineFormatting(orderedMatch[1])}</li>`);
+                continue;
+            }
+
+            flushList();
+            html += `<p>${applyInlineFormatting(line)}</p>`;
+        }
+
+        flushList();
+        flushCode();
+
+        return html || applyInlineFormatting(text);
     }
     
     addMessage(text, sender) {
@@ -273,16 +382,18 @@ class ChatApp {
     showToast(message) {
         // Simple toast notification
         const toast = document.createElement('div');
+        const isDark = document.documentElement.getAttribute('data-theme') === 'dark';
         toast.style.cssText = `
             position: fixed;
             top: 20px;
             right: 20px;
-            background: #333;
+            background: ${isDark ? '#2a2a3e' : '#333'};
             color: white;
             padding: 1rem 1.5rem;
             border-radius: 5px;
             z-index: 1001;
             animation: slideInRight 0.3s ease-out;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
         `;
         toast.textContent = message;
         
