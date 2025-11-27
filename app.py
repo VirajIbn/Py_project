@@ -1,7 +1,5 @@
 from flask import Flask, render_template, request, jsonify
 from flask_cors import CORS
-import requests
-import json
 import os
 from datetime import datetime
 
@@ -11,59 +9,79 @@ try:
 except ImportError:
     CONFIG_API_KEY = None
 
+# Import Google Generative AI SDK
+try:
+    from google import genai
+except ImportError:
+    genai = None
+
 app = Flask(__name__)
 CORS(app)  # Enable CORS for all routes
 
 class GeminiChatbot:
     def __init__(self, api_key=None):
+        if genai is None:
+            raise ValueError("google-genai package is required. Install it with: pip install -q -U google-genai")
+        
         self.api_key = api_key or CONFIG_API_KEY or os.getenv('GEMINI_API_KEY')
         if not self.api_key:
             raise ValueError("API key is required")
         
-        self.api_url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent"
-        self.headers = {
-            'Content-Type': 'application/json',
-            'X-goog-api-key': self.api_key
-        }
+        # Initialize the client with API key (as shown in documentation)
+        self.client = genai.Client(api_key=self.api_key)
+        
+        # Try different models in order of preference (starting with gemini-2.5-flash from docs)
+        self.models = [
+            'gemini-2.5-flash',
+            'gemini-1.5-flash',
+            'gemini-1.5-pro',
+            'gemini-pro'
+        ]
+        self.current_model = None
     
     def send_message(self, message):
         """Send a message to the Gemini API and return the response"""
-        try:
-            payload = {
-                "contents": [
-                    {
-                        "parts": [
-                            {
-                                "text": message
-                            }
-                        ]
-                    }
-                ]
-            }
-            
-            response = requests.post(
-                self.api_url,
-                headers=self.headers,
-                data=json.dumps(payload),
-                timeout=30
-            )
-            
-            response.raise_for_status()
-            response_data = response.json()
-            
-            if 'candidates' in response_data and len(response_data['candidates']) > 0:
-                candidate = response_data['candidates'][0]
-                if 'content' in candidate and 'parts' in candidate['content']:
-                    return candidate['content']['parts'][0]['text']
-            
-            return "Sorry, I couldn't generate a response. Please try again."
-            
-        except requests.exceptions.RequestException as e:
-            return f"Error connecting to API: {str(e)}"
-        except json.JSONDecodeError:
-            return "Error parsing API response. Please try again."
-        except Exception as e:
-            return f"An unexpected error occurred: {str(e)}"
+        # Try each model until one works
+        last_error = None
+        for model_name in self.models:
+            try:
+                # Use the SDK method as shown in documentation
+                response = self.client.models.generate_content(
+                    model=model_name,
+                    contents=message
+                )
+                
+                # Extract text from response (as shown in docs: response.text)
+                if hasattr(response, 'text') and response.text:
+                    self.current_model = model_name
+                    return response.text
+                else:
+                    # Fallback: try to extract from candidates if text attribute doesn't exist
+                    if hasattr(response, 'candidates') and len(response.candidates) > 0:
+                        candidate = response.candidates[0]
+                        if hasattr(candidate, 'content') and hasattr(candidate.content, 'parts'):
+                            parts = candidate.content.parts
+                            if len(parts) > 0 and hasattr(parts[0], 'text'):
+                                self.current_model = model_name
+                                return parts[0].text
+                    
+                    # If we got here but no text, try next model
+                    if model_name != self.models[-1]:
+                        continue
+                    else:
+                        return "Received response but could not extract text content."
+                    
+            except Exception as e:
+                # If this model fails, try the next one
+                error_msg = str(e)
+                last_error = error_msg
+                if model_name != self.models[-1]:
+                    continue
+                else:
+                    return f"Error with all models. Last error: {error_msg}"
+        
+        # If all models failed, return the last error
+        return last_error or "Unable to generate response from any available model."
 
 # Initialize chatbot
 try:

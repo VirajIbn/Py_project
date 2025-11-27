@@ -21,10 +21,12 @@ class GeminiChatbot:
         if not self.api_key:
             raise ValueError("API key is required. Set GEMINI_API_KEY in config.py, as environment variable, or pass api_key parameter")
         
-        self.api_url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent"
+        # Use a public Generative Language model endpoint by default.
+        # If you have access to Gemini models, replace this with the proper endpoint
+        # and use service-account authentication if required.
+        self.base_url = "https://generativelanguage.googleapis.com/v1beta2/models/text-bison-001:generate"
         self.headers = {
-            'Content-Type': 'application/json',
-            'X-goog-api-key': self.api_key
+            'Content-Type': 'application/json'
         }
         
         # Chat history for context
@@ -41,46 +43,49 @@ class GeminiChatbot:
             The AI's response
         """
         try:
-            # Prepare the request payload
+            # Prepare the request payload using the public generate format
             payload = {
-                "contents": [
-                    {
-                        "parts": [
-                            {
-                                "text": message
-                            }
-                        ]
-                    }
-                ]
+                "prompt": {"text": message},
+                "temperature": 0.2
             }
-            
-            # Make the API request
+
+            # Send API key as query parameter (server-side). If you use a service account,
+            # replace this with an OAuth Bearer token in the Authorization header.
             response = requests.post(
-                self.api_url,
+                f"{self.base_url}?key={self.api_key}",
                 headers=self.headers,
-                data=json.dumps(payload),
+                json=payload,
                 timeout=30
             )
-            
-            # Check if the request was successful
-            response.raise_for_status()
-            
+
+            # If the remote API returns an error status, return its status/body for diagnostics
+            if response.status_code >= 400:
+                return f"Remote API error: {response.status_code} - {response.text}"
+
             # Parse the response
             response_data = response.json()
-            
-            # Extract the generated text
-            if 'candidates' in response_data and len(response_data['candidates']) > 0:
-                candidate = response_data['candidates'][0]
-                if 'content' in candidate and 'parts' in candidate['content']:
-                    generated_text = candidate['content']['parts'][0]['text']
-                    
-                    # Add to chat history
-                    self.chat_history.append({"role": "user", "content": message})
-                    self.chat_history.append({"role": "assistant", "content": generated_text})
-                    
-                    return generated_text
-            
-            return "Sorry, I couldn't generate a response. Please try again."
+
+            # Try common response shapes; fallback to stringified response
+            generated_text = None
+            if isinstance(response_data, dict):
+                if 'candidates' in response_data and len(response_data['candidates']) > 0:
+                    candidate = response_data['candidates'][0]
+                    for key in ('output', 'content', 'text'):
+                        if key in candidate:
+                            generated_text = candidate.get(key) if isinstance(candidate.get(key), str) else str(candidate.get(key))
+                if not generated_text and 'output' in response_data:
+                    out = response_data['output']
+                    if isinstance(out, list) and len(out) > 0:
+                        generated_text = out[0].get('content', out[0].get('text', str(out[0]))) if isinstance(out[0], dict) else str(out[0])
+                if not generated_text and 'text' in response_data:
+                    generated_text = response_data['text']
+
+            if generated_text:
+                self.chat_history.append({"role": "user", "content": message})
+                self.chat_history.append({"role": "assistant", "content": generated_text})
+                return generated_text
+
+            return json.dumps(response_data)
             
         except requests.exceptions.RequestException as e:
             return f"Error connecting to API: {str(e)}"
