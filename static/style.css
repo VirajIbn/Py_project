@@ -321,6 +321,8 @@ body {
     line-height: 1.7;
     word-wrap: break-word;
     white-space: pre-wrap;
+    overflow-wrap: anywhere;
+    word-break: break-word;
     font-size: 0.95rem;
     display: flex;
     flex-direction: column;
@@ -392,6 +394,8 @@ body {
     border-radius: 4px;
     font-family: 'Fira Code', 'Consolas', monospace;
     font-size: 0.9rem;
+    word-break: break-word;
+    overflow-wrap: anywhere;
 }
 
 .user-message .message-text code {
@@ -408,6 +412,9 @@ body {
     font-size: 0.85rem;
     line-height: 1.5;
     border: 1px solid rgba(255, 255, 255, 0.08);
+    white-space: pre-wrap;
+    word-break: break-word;
+    overflow-wrap: anywhere;
 }
 
 [data-theme="dark"] .message-text pre {
